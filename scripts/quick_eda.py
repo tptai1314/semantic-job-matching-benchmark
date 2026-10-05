@@ -92,7 +92,9 @@ def main() -> None:
         "resume_shared_pct_of_test": round(
             100 * len(set(tr_ids[1]) & set(te_ids[1])) / te_ids[1].nunique(), 2
         ),
-        "pair_shared_train_test": len(set(zip(*tr_ids)) & set(zip(*te_ids))),
+        "pair_shared_train_test": len(
+            set(zip(*tr_ids, strict=True)) & set(zip(*te_ids, strict=True))
+        ),
     }
     report["llm_workload"] = {
         "unique_docs_train": int(tr_ids[1].nunique() + tr_ids[0].nunique()),

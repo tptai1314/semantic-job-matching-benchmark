@@ -28,16 +28,27 @@ runtime:
 
 data:
   hf_dataset: "cnamuangtoun/resume-job-description-fit"
+  dataset_revision: null       # ghim revision để tái lập (Bước 2.2)
   dataset_config: null
+  combine_all_splits: true     # gộp train 6241 + test 1759 = 8000 rồi mới chia fold
   split:
-    strategy: "GroupKFold"   # GroupKFold theo job_id
+    strategy: "GroupKFold"
     n_splits: 5
     shuffle: true
     by: "job_id"
     seed: 42
+    # Hệ split phụ: CV-disjoint (theo resume_id) — báo cáo như phân tích độ bền
+    secondary:
+      enabled: true
+      by: "resume_id"
+      prefix: "fold_cvdisjoint_"
     # fallback chiến lược holdout nếu đổi strategy
     ratios: { train: 0.70, val: 0.15, test: 0.15 }
+  leakage_audit: true           # in bảng JD chung / CV chung / cặp chung cho từng fold
   secondary_dataset: "med2425/resume-job-fit-merged-v1"
+  secondary_dataset_note: >
+    Gộp chính dataset trên và dán nhãn lại bằng Qwen2.5-32B -> đo đổi hàm nhãn,
+    KHÔNG phải dịch chuyển miền. Lọc bằng cột `source` trước khi so sánh.
   columns:
     resume: "resume_text"
     job: "job_description_text"
@@ -68,15 +79,24 @@ embedding:
 extraction:
   provider: "ollama"
   model: "qwen3:4b"
+  model_digest: null          # BẮT BUỘC ghi ở Bước 2.6 (ollama show --modelfile)
   host: "http://localhost:11434"
+  think: false               # Qwen3 bat thinking mac dinh -> phai tat de JSON on dinh
+  format: "json"
+  keep_alive: "10m"
+  seed: 42
   temperature: 0.0
   top_p: 0.9
   max_output_tokens: 1024
-  num_ctx: 8192
+  num_ctx: 16384             # CV dai nhat ~4.2k token + prompt + schema JSON
+  assert_num_ctx: true       # nhieu client bo qua num_ctx -> phai assert
   max_retries: 3
   timeout_s: 180
   prompt_version: "v1"
-  cache_subdir: "cache/views/{prompt_version}"
+  cache_subdir: "cache/views/{prompt_version}/{model_digest}"
+  cache_key: "hash(text) + model_digest + hash(prompt) + params"
+  n_distinct_texts: 994      # 643 CV + 351 JD (khong phai 8000)
+  n_parallel: 2
 
 # 7 view CV, 5 view JD -> 7 cặp lõi + 2 cặp chéo = 9 tín hiệu
 views:
@@ -100,6 +120,10 @@ matching:
   signals:
     total: 9
     empty_view_value: 0.0   # view rỗng -> tín hiệu 0 (kèm mask)
+    normalize: "zscore"     # chuan hoa tren TRAIN truoc khi fusion (Bước 7.3)
+    check_collinearity: true  # do ma tran tuong quan 9 tin hieu truoc khi lam adaptive
+    collinearity_threshold: 0.9
+    mask_leak_ablation: true  # ablation "bo mask" (Bước 12.4)
 
 fusion:
   static_equal_weights: true
@@ -107,7 +131,8 @@ fusion:
   adaptive:
     hidden_size: 64
     dropout: 0.1
-  attention:
+  attention:                # Mục cắt số 1 — xoá khối này nếu bỏ Bước 8.7
+    enabled: false
     hidden_size: 64
     num_heads: 2
     num_layers: 1
@@ -132,20 +157,42 @@ training:
 
 evaluation:
   k: [3, 5, 10]
-  primary_k: 5
+  primary_k: 5             # giu duoc 256 JD; K=10 chi con 175 JD (xem PLAN 2.7)
+  report_n_jd: true        # luon kem n_jd cho tung o cua bang
   ndcg_empty_jobs: "drop"        # JD không có CV relevant -> loại khỏi NDCG
   p_at_k_empty_jobs: "drop"
-  tie_handling: "expected_ndcg"  # hòa điểm: expected NDCG, không ignore_ties
+  tie_handling: "expected_ndcg"  # hòa điểm: expected cho CẢ NDCG, P@K, R@K, MRR
+  min_candidates_rule: "report_n_jd"   # JD có < K ứng viên: vẫn tính nhưng phải báo n_jd
   significance:
     n_bootstrap: 10000
     alpha: 0.05
     ci: 0.95
     tests: ["paired_bootstrap", "wilcoxon"]
+    bootstrap: "cluster_by_job_id"    # KHONG bootstrap phang
     correction: "holm"
+    effect_sizes: ["cohens_dz", "cliffs_delta"]
+  power:
+    # Do that o Bước 3.7 — thay the con so 0.01 cam tinh
+    target_power: 0.80
+    sesoi: null            # SESOI = 3 x MDE (dự kiến 0.05-0.07)
+    negligible: 0.01       # nguong BO QUA, KHONG phai nguong y nghia
+    sigma_d_scenarios: [1.0, 0.5]   # x sigma_jd
   noninferiority:
-    delta: null       # chốt ở Bước 4.6: delta = max(1 std, 0.01)
+    delta: null       # chốt ở Bước 4.6 từ SESOI, KHÔNG dùng max(1 std, 0.01)
+    formula: "lower_CI95(đề xuất − B6) > −delta"   # một phía kiểu TOST
+
+extraction_quality:
+  gate:                     # CỔNG CHẶN BẮT BUỘC trước mọi kết luận về phương pháp
+    min_valid_json_rate: 0.95
+    max_empty_view_rate: 0.10
+  gold_schema_n: 100        # đo precision/recall/F1 của trích xuất
+  manual_label_n: 994       # chấm tay toàn bộ nếu khả thi; tối thiểu 200
+  n_raters: 2               # Cohen's kappa / Krippendorff alpha trên mẫu con
+  stability_rerun_n: 30
 
 baselines:
+  b0_random:
+    seeds: [42, 43, 44, 45, 46]
   b1_tfidf:
     ngram_range: [1, 2]
     max_features: 200000
@@ -157,24 +204,44 @@ baselines:
       - { ngram_range: [1, 2], max_features: 500000 }
   b2_sbert_full:
     model: "sentence-transformers/all-MiniLM-L6-v2"
-  b3_sbert_reduced:
+    max_chunks: 4
+    max_chunks_ablation: [8]      # p90 CV ~1500 token -> 4x384=1536 sat nguong
+  b3_sbert_reduced:               # PHU THUOC 6.1 (co view tu LLM)
     join_views: " "
     model: "sentence-transformers/all-MiniLM-L6-v2"
+  b3h_heuristic_reduced:          # baseline KIEM SOAT then chot cho H1 — KHONG dung LLM
+    method: "heading_regex"
+    head_patterns: ["skills?", "experience", "education", "projects?", "summary", "objective"]
+    max_tokens: 384
   b4_biencoder_ft:
     model: "sentence-transformers/all-MiniLM-L6-v2"
-    seeds: [42, 43, 44]
+    loss: null              # CHOT o Bước 4.3: margin_mse | mse | infonce
+    seeds: [42, 43, 44, 45, 46]
   b5_crossencoder_pt:
     model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
   b6_crossencoder_ft:
     model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    objective: null         # CHOT o Bước 4.3: regression | ordinal | 3class_ce
     seeds: [42, 43, 44, 45, 46]
-  bm25:
+  b7_concat_mlp:
+    hidden_size: 64
+  b8_llm_judge:                   # LLM-as-judge — cau hoi so 1 cua hoi dong
+    model: "qwen3:4b"
+    sample_n: 3000
+    prompt_version: "v1"
+  bm25:                           # chay cung luot Bước 3.6 hoac xoa khoi config
+    enabled: true
     k1: 1.5
     b: 0.75
+  ablation_encoders:              # Bước 12.5 BẮT BUỘC
+    - "BAAI/bge-m3"
+    - "intfloat/e5-large-v2"
 
 experiments:
   seeds: [42, 43, 44, 45, 46]
+  min_seeds: 3                   # khi trễ
   split_seed: 42
+  splits: ["job_id", "resume_id"]   # luon bao cao ca hai he split
   save_per_job: true
   log_hparams: "results/hparam_log.csv"
   git_commit: null
