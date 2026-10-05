@@ -1,0 +1,180 @@
+# Frevia — cấu hình gốc cho toàn bộ thí nghiệm.
+# Mọi script đọc file này, không hard-code giá trị.
+
+project:
+  name: frevia
+  root: "."
+
+paths:
+  raw: "data/raw"
+  processed: "data/processed"
+  splits: "data/splits"
+  cache: "cache"
+  cache_views: "cache/views"
+  cache_embeddings: "cache/embeddings"
+  results: "results"
+  baselines_results: "results/baselines"
+  tables: "results/tables"
+  figures: "results/figures"
+  logs: "results/logs"
+  checkpoints: "results/checkpoints"
+  notebooks: "notebooks"
+  docs: "docs"
+
+runtime:
+  device: "auto"          # auto | cpu | cuda
+  num_workers: 0
+  dtype: "float32"
+
+data:
+  hf_dataset: "cnamuangtoun/resume-job-description-fit"
+  dataset_config: null
+  split:
+    strategy: "GroupKFold"   # GroupKFold theo job_id
+    n_splits: 5
+    shuffle: true
+    by: "job_id"
+    seed: 42
+    # fallback chiến lược holdout nếu đổi strategy
+    ratios: { train: 0.70, val: 0.15, test: 0.15 }
+  secondary_dataset: "med2425/resume-job-fit-merged-v1"
+  columns:
+    resume: "resume_text"
+    job: "job_description_text"
+    label: "label"
+  label_map:
+    "No Fit": 0
+    "Potential Fit": 1
+    "Good Fit": 2
+  relevant:
+    strict: [2]           # (A) chỉ Good Fit
+    lenient: [1, 2]       # (B) Good + Potential
+    primary: "lenient"
+  hashing:
+    algorithm: "sha1"
+    length: 16
+
+embedding:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  batch_size: 64
+  max_seq_length: 512
+  normalize: true
+  chunking:
+    enabled: true
+    strategy: "chunk_mean"   # none | head_truncate | chunk_mean
+    chunk_tokens: 384
+    max_chunks: 4
+
+extraction:
+  provider: "ollama"
+  model: "qwen3:4b"
+  host: "http://localhost:11434"
+  temperature: 0.0
+  top_p: 0.9
+  max_output_tokens: 1024
+  num_ctx: 8192
+  max_retries: 3
+  timeout_s: 180
+  prompt_version: "v1"
+  cache_subdir: "cache/views/{prompt_version}"
+
+# 7 view CV, 5 view JD -> 7 cặp lõi + 2 cặp chéo = 9 tín hiệu
+views:
+  resume: [skills, experience, education, responsibilities, achievements, extras, summary]
+  job: [requirements, responsibilities, qualifications, benefits, summary]
+  pairs:
+    - [skills, requirements]              # 1
+    - [experience, responsibilities]      # 2
+    - [education, qualifications]         # 3
+    - [responsibilities, responsibilities]# 4
+    - [achievements, benefits]            # 5
+    - [extras, requirements]              # 6
+    - [summary, summary]                  # 7
+  cross_pairs:
+    - [skills, qualifications]            # 8
+    - [achievements, responsibilities]    # 9
+  core_count: 7
+  cross_count: 2
+
+matching:
+  signals:
+    total: 9
+    empty_view_value: 0.0   # view rỗng -> tín hiệu 0 (kèm mask)
+
+fusion:
+  static_equal_weights: true
+  static_weights: null      # null = đều; grid search trên val ghi vào results/hparam_log.csv
+  adaptive:
+    hidden_size: 64
+    dropout: 0.1
+  attention:
+    hidden_size: 64
+    num_heads: 2
+    num_layers: 1
+    dropout: 0.1
+
+training:
+  optimizer: "adamw"
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  batch_pairs: 4096
+  max_epochs: 50
+  patience: 5
+  grad_clip: 1.0
+  loss: "bpr"
+  early_metric: "ndcg@5"
+  finetune:
+    max_epochs: 20
+    patience: 3
+    batch_size: 16
+    lr: 2.0e-5
+    warmup_ratio: 0.1
+
+evaluation:
+  k: [3, 5, 10]
+  primary_k: 5
+  ndcg_empty_jobs: "drop"        # JD không có CV relevant -> loại khỏi NDCG
+  p_at_k_empty_jobs: "drop"
+  tie_handling: "expected_ndcg"  # hòa điểm: expected NDCG, không ignore_ties
+  significance:
+    n_bootstrap: 10000
+    alpha: 0.05
+    ci: 0.95
+    tests: ["paired_bootstrap", "wilcoxon"]
+    correction: "holm"
+  noninferiority:
+    delta: null       # chốt ở Bước 4.6: delta = max(1 std, 0.01)
+
+baselines:
+  b1_tfidf:
+    ngram_range: [1, 2]
+    max_features: 200000
+    min_df: 2
+    sublinear_tf: true
+    candidates:
+      - { ngram_range: [1, 1], max_features: 100000 }
+      - { ngram_range: [1, 2], max_features: 200000 }
+      - { ngram_range: [1, 2], max_features: 500000 }
+  b2_sbert_full:
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+  b3_sbert_reduced:
+    join_views: " "
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+  b4_biencoder_ft:
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+    seeds: [42, 43, 44]
+  b5_crossencoder_pt:
+    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  b6_crossencoder_ft:
+    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    seeds: [42, 43, 44, 45, 46]
+  bm25:
+    k1: 1.5
+    b: 0.75
+
+experiments:
+  seeds: [42, 43, 44, 45, 46]
+  split_seed: 42
+  save_per_job: true
+  log_hparams: "results/hparam_log.csv"
+  git_commit: null

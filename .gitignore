@@ -1,0 +1,25 @@
+# dữ liệu và cache sinh ra
+data/raw/*
+!data/raw/.gitkeep
+data/processed/
+data/splits/*.json
+cache/
+results/
+
+# môi trường
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# tài liệu tải về (giữ README nếu cần)
+docs/papers/*.pdf
+
+# editor
+.vscode/
+.idea/
+.DS_Store

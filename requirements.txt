@@ -1,0 +1,44 @@
+# Pinned versions verified on the dev machine (Windows, Python 3.13.3).
+# torch is CPU-only here; swap for the CUDA wheel before Giai đoạn 5 if a GPU is used.
+
+# --- core numerics ---
+torch==2.14.0
+numpy==2.5.1
+scipy==1.18.1
+pandas==3.0.6
+
+# --- modelling ---
+transformers==5.17.0
+tokenizers==0.23.2
+sentence-transformers==6.1.0
+safetensors==0.8.0
+accelerate==1.15.0
+huggingface_hub==1.32.0
+
+# --- evaluation / baselines ---
+scikit-learn==1.9.1
+rank-bm25==0.2.2
+
+# --- data ---
+datasets==5.0.1
+pyarrow==25.0.1
+fsspec==2026.6.0
+dill==0.4.1
+multiprocess==0.70.19
+
+# --- config / io ---
+PyYAML==6.0.3
+tqdm==4.70.1
+regex==2026.9.10
+
+# --- local LLM (view extraction) ---
+ollama==0.6.3
+
+# --- plots / notebooks ---
+matplotlib==3.11.2
+
+# --- dev tooling ---
+pytest==9.1.1
+ruff==0.16.8
+mypy==2.3.1
+types-PyYAML==6.0.12.20260906
