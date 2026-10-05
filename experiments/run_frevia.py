@@ -35,6 +35,8 @@ from src.utils import resolve_device, set_seed  # noqa: E402
 STAGES = {
     "prepare": "Kiem tra moi truong, tao thu muc, ghi lai phien ban thu vien",
     "info": "In cau hinh dang dung (khong chay thi nghiem)",
+    "dataset": "Tai + lam sach dataset, ghi data/processed/pairs.parquet",
+    "folds": "Chia fold job_id + resume_id, ghi bang ro ri leak vao results/tables",
 }
 
 
@@ -61,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
                        help="ghi de gia tri trong config, vi du --set evaluation.primary_k=10")
+        if name in ("dataset", "folds"):
+            p.add_argument("--force", action="store_true",
+                           help="tao lai du du lieu da ton tai")
     return parser
 
 
@@ -128,6 +133,34 @@ def main(argv: list[str] | None = None) -> int:
         out = Path(get(cfg, "paths.logs")) / "env_info.json"
         out.write_text(json.dumps(info, indent=2), encoding="utf-8")
         print(f"[frevia] da ghi {out}")
+        return 0
+
+    if args.stage == "folds":
+        from src.data.pipeline import build_all_splits
+
+        report = build_all_splits(cfg)
+        for group_col, summary in report["split_systems"].items():
+            print(
+                f"[frevia] split theo {group_col}: "
+                f"{summary['n_groups_total']} nhom, cot '{summary['fold_column']}', "
+                f"nhom/fold it nhat {min(p['n_cv'] for p in summary['per_fold'])} CV, "
+                f"{summary['rows_min']}-{summary['rows_max']} dong"
+            )
+        print(f"[frevia] da ghi bang ro ri: {Path(get(cfg, 'paths.tables')) / 'leakage_audit.csv'}")
+        return 0
+
+    if args.stage == "dataset":
+        from src.data.pipeline import prepare_pairs
+
+        pairs, report = prepare_pairs(cfg, force=bool(getattr(args, "force", False)))
+        fp = report["fingerprint"]
+        print(f"[frevia] dataset : {fp['hf_dataset']} ({fp['n_rows']} dong goc)")
+        print(f"[frevia] unique  : {fp['n_resumes']} CV, {fp['n_jobs']} JD")
+        print(
+            f"[frevia] labels  : {report['rows_in']} -> {report['rows_out']} dong "
+            f"(loai ngan {report['rows_dropped_short_text']}, "
+            f"trung cap {report['rows_dropped_duplicate_pair']})"
+        )
         return 0
 
     raise SystemExit(f"Chua cai dat stage: {args.stage}")
