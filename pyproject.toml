@@ -1,7 +1,7 @@
 [project]
-name = "frevia"
+name = "semantic-job-matching-benchmark"
 version = "0.1.0"
-description = "Frevia: multi-view LLM extraction + SBERT fusion for resume-job matching"
+description = "Semantic job matching benchmark: multi-view LLM extraction + SBERT fusion for resume-job matching"
 requires-python = ">=3.12"
 
 [tool.ruff]
